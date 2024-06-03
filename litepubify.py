@@ -374,12 +374,13 @@ def parse_series_page(page_url, author):
         story = Story()
         title_elem = chapter_elem.find_all('a', recursive=False)[0]
         story.url = title_elem['href']
-        story.title = title_elem.text
+        story.title = title_elem.text.strip()
         story.author = author
 
         subtitle_elem = chapter_elem.find_all('p', recursive=False)[0]
-        story.teaser = subtitle_elem.text
-        story.category = subtitle_elem.find_all('a', recursive=False)[0].text
+        story.category = subtitle_elem.find_all('a', recursive=False)[0].text.strip()
+        teaser = subtitle_elem.text.strip()
+        story.teaser = teaser.replace(story.category, '').strip()
 
         story.rating = 0.0
         story.hot = False
@@ -393,7 +394,7 @@ def parse_author_works_page(html):
     if not author_element:
         error("Cannot determine author on member page.")
     if "Stories by " in author_element.text.strip():
-        author = author_element.text.strip().replace("Stories by ", "")
+        author = author_element.text.strip().replace("Stories by ", "").strip()
     else:
         error("Cannot determine author on member page.")
     subm_table_match = soup.select("div[class^=_works_wrapper]")
@@ -416,7 +417,7 @@ def parse_author_works_page(html):
         if validate_classes(tr, SERIES_CLASS):
             print("Series: " + tr.select("a[class^=_item_title]")[0].text)
             series = Series()
-            series.title = tr.select("a[class^=_item_title]")[0].text
+            series.title = tr.select("a[class^=_item_title]")[0].text.strip()
             series.author = author
             series_url = tr.select("a[class^=_item_title]")[0]['href']
             print(series_url)
@@ -426,20 +427,20 @@ def parse_author_works_page(html):
             print("Story: " + tr.select("a[class^=_item_title]")[0].text)
             story_stats_elem = tr.select("div[class^=_stats]")[0]
             story = Story()
-            story.title = tr.select("a[class^=_item_title]")[0].text
+            story.title = tr.select("a[class^=_item_title]")[0].text.strip()
             story.author = author
             story.url = tr.select("a[class^=_item_title]")[0]['href']
             if not story.url.startswith('https://www.literotica.com'):
                 story.url = "https://www.literotica.com" + story.url
             rating_elem = story_stats_elem.find('span', {'title' : 'Rating'})
             if rating_elem:
-                story.rating = rating_elem.find_all('span', recursive=False)[0].text
+                story.rating = rating_elem.find_all('span', recursive=False)[0].text.strip()
             else:
                 story.rating = "0.0"
             story.hot = True if story_stats_elem.find('span', {'title' : 'Hot'}) else False
-            story.category = tr.select("a[class^=_item_category]")[0].text
-            story.date = tr.select("span[class^=_date_approve]")[0].text
-            story.teaser = "" if not tr.select("p[class^=_item_description]") else tr.select("p[class^=_item_description]")[0].text
+            story.category = tr.select("a[class^=_item_category]")[0].text.strip()
+            story.date = tr.select("span[class^=_date_approve]")[0].text.strip()
+            story.teaser = "" if not tr.select("p[class^=_item_description]") else tr.select("p[class^=_item_description]")[0].text.strip()
             all_oneshots.append(story)
     print(len(all_oneshots), len(all_series))
     return (all_oneshots, all_series)
