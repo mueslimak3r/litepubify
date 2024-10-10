@@ -390,7 +390,7 @@ def parse_series_page(page_url, author):
 
 def parse_author_works_page(html):
     soup = bs4.BeautifulSoup(html, 'html.parser')
-    author_element = soup.find('h1', class_='headline__title')
+    author_element = soup.find('title')
     if not author_element:
         error("Cannot determine author on member page.")
     if "Stories by " in author_element.text.strip():
@@ -478,16 +478,15 @@ def get_story_text(st):
     #[0].select("div[class^=_item_title]")[0]['href']
 
     #vals = re.findall('<option value=".*?">(\d+)</option>', sel_match.group(1))
-    if not paginator_elements: # just one page
-        error("Couldn't find paginator elements.")
     complete_text = ""
 
     end = 1
-    for pe in paginator_elements:
-        if pe.text.strip() == '' or not pe.text.strip().isnumeric():
-            continue
-        if int(pe.text.strip()) > end:
-            end = int(pe.text.strip())
+    if paginator_parent_element:
+        for pe in paginator_elements:
+            if pe.text.strip() == '' or not pe.text.strip().isnumeric():
+                continue
+            if int(pe.text.strip()) > end:
+                end = int(pe.text.strip())
 
     for idx in range(1, end+1):
         print("page %s" % idx)
