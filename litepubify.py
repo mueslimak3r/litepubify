@@ -410,7 +410,7 @@ def parse_author_works_page(html):
     all_oneshots = []
     series = None
     story = None
-    ONESHOT_CLASS = (['_works_item', '_series_parts__item'], [])
+    ONESHOT_CLASS = (['_works_item'], [])
     SERIES_CLASS = (['_works_item__series_expanded_header_card'], [])
     for tr in trs:
         #print(tr["class"])
