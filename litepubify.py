@@ -25,6 +25,7 @@ import sys
 import uuid
 import xml.sax.saxutils as saxutils
 import zipfile
+import bs4
 
 # python 2 / 3 compatibility code
 try:
@@ -84,7 +85,7 @@ def main():
     debug("title: '{}', author: '{}', memberpage: '{}'".format(title, author, memberpage_url))
 
     memberpage, _ = fetch_url(memberpage_url)
-    (all_oneshots, all_series) = parse_story_list(memberpage)
+    (all_oneshots, all_series) = parse_author_works_page(memberpage)
 
     if args.debug:
         debug('ALL STORIES BY AUTHOR {}:'.format(author))
@@ -100,16 +101,29 @@ def main():
     for url in args.url:
         story_html, _ = fetch_url(url)
         page_id = extract_id(url)
+        print("target id [%s]" % str(page_id))
         found_story = None
         found_series = None
+        print("searching oneshots for target id [%s]" % str(page_id))
         for st in all_oneshots:
+            print(extract_id(st.url))
             if extract_id(st.url) == page_id:
                 found_story = st
                 found_oneshots_and_series.append(found_story)
                 break
 
         if not found_story:
+            print("searching series for target id [%s]" % str(page_id))
             for series in all_series:
+                print("searching series for target id [%s]" % str(page_id))
+                if extract_id(series.url) == page_id:
+                    found_series = series
+                    found_story = series.stories[0]
+                    if args.single:
+                        found_oneshots_and_series.append(found_story)
+                    else:
+                        found_oneshots_and_series.append(series)
+                    break
                 for story in series.stories:
                     if extract_id(story.url) == page_id:
                         found_story = story
@@ -149,28 +163,26 @@ def parse_commandline_arguments():
     parser.add_argument('--disk-cache-path', metavar='PATH', help='Path for the disk cache (optional, usually not required). If this option is specified, downloaded websites are cached in a file and loaded from disk in subsequent runs (when this option is used again with the same path). This is mainly useful for testing, to avoid repeated downloads. Without this option, litepubify keeps everything in memory and only writes the final epub file to disk.')
     args = parser.parse_args()
 
+
 def parse_story_header(html):
-    """Parses the header of the story html to find title, author and the link to the author's memberpage.
-
-    Args:
-      html (text): the full html text of the story
-
-    Returns:
-      title, author and memberpage url as a 3-tuple
-
-    """
-    header_match = re.search(r'<div class="b-story-header">(.*?)</div>', html, flags=re.DOTALL)
-    if not header_match:
-        error("Cannot find header in html.")
-    header_match2 = re.search(r'<h1>(.*?)</h1>.*?<a href="(.*?)">(.*?)</a>', header_match.group(1), flags=re.DOTALL)
-    if not header_match2:
-        error("Cannot parse header.")
-    title = header_match2.group(1)
-    memberpage_url = header_match2.group(2)
-    memberpage_url = re.sub(r'&amp;', r'&', memberpage_url)
-    memberpage_url = re.sub(r'^//', r'http://', memberpage_url)
-    author = header_match2.group(3)
-    return (title, author, memberpage_url)
+    soup = bs4.BeautifulSoup(html, 'html.parser')
+    title_tag = soup.find('h1', class_='headline')
+    if title_tag:
+        title = title_tag.text.strip()
+    else:
+        error("Cannot find title in html.")
+    #element = soup.find('a', class_='icon-account-plus')
+    element = soup.find('div', {'title' : 'Stories'})
+    #print(element)
+    if element:
+        url = str((element.find_all("a", recursive=False))[0]['href'])
+        # url = "/".join(url.split('/')[:-1])
+        author = url.split('/')[-2]
+    else:
+        error("Cannot find author link in html.")
+        error("Cannot find author's member page link in html.")
+    return title, author, url
+    
 
 def make_epub_from_stories_and_series(stories_and_series, author):
     """Make epub file from story or series.
@@ -343,74 +355,106 @@ class XHTMLCleaner(compat_html_parser.HTMLParser):
     def get_output(self):
         return self.accum
 
-def parse_story_list(html):
-    """Parse the list of stories from the submissions section of the author's memberpage.
-    """
-    author_match = re.search(r'<span class="unameClick"><a .*?>(.*?)</a>.*?</span>', html, flags=re.DOTALL)
-    if not author_match:
+def validate_classes(element, rules):
+    classes = element["class"]
+    required_classes = rules[0]
+    excluded_classes = rules[1]
+    if not required_classes or not classes:
+        return False
+
+    rc_idx = 0
+    found_classes = []
+    for c in classes:
+        for ec in excluded_classes:
+            if c.startswith(ec):
+                return False
+        if rc_idx < len(required_classes):
+            for rc in required_classes[rc_idx:]:
+                if c.startswith(rc):
+                    found_classes.append(c)
+                    rc_idx += 1
+    return len(list(set(found_classes))) == len(required_classes)
+
+def parse_series_page(page_url, author):
+    html, _ = fetch_url(page_url)
+    soup = bs4.BeautifulSoup(html, 'html.parser')
+    chapters_container = soup.select("ul[class=series__works]")[0]
+    chapter_elements = chapters_container.find_all('li', recursive=False)
+    stories = []
+    for chapter_elem in chapter_elements:
+        story = Story()
+        title_elem = chapter_elem.find_all('a', recursive=False)[0]
+        story.url = title_elem['href']
+        story.title = title_elem.text.strip()
+        story.author = author
+
+        subtitle_elem = chapter_elem.find_all('p', recursive=False)[0]
+        story.category = subtitle_elem.find_all('a', recursive=False)[0].text.strip()
+        teaser = subtitle_elem.text.strip()
+        story.teaser = teaser.replace(story.category, '').strip()
+
+        story.rating = 0.0
+        story.hot = False
+        story.date = ""
+        stories.append(story)
+    return stories
+
+def parse_author_works_page(html):
+    soup = bs4.BeautifulSoup(html, 'html.parser')
+    author_element = soup.find('title')
+    if not author_element:
         error("Cannot determine author on member page.")
-    author = author_match.group(1)
-
-    subm_table_match = re.search(r'<table.*?>.*?<col .*?(<tr .*?)</table>', html, flags=re.DOTALL)
+    if "Stories by " in author_element.text.strip():
+        author = author_element.text.strip().replace("Stories by ", "").strip()
+    else:
+        error("Cannot determine author on member page.")
+    subm_table_match = soup.select("div[class^=_works_wrapper]")
     if not subm_table_match:
-        error("Cannot find list of submissions on member page.")
+        error("Cannot find submission table.")
+    subm_table_match = subm_table_match[0]
+    trs = subm_table_match.find_all('div', recursive=False)
+    #trs = subm_table_match.select("div[class^=_works_item]", recursive=False)
+    print("trs %s " % len(trs))
 
-    trs = re.findall(r'(<tr.*?</tr>)', subm_table_match.group(1), re.DOTALL)
+    #trs = re.findall(r'(<tr.*?</tr>)', subm_table_match.group(1), re.DOTALL)
     all_series = []
     all_oneshots = []
     series = None
     story = None
+    ONESHOT_CLASS = (['_works_item'], [])
+    SERIES_CLASS = (['_works_item__series_expanded_header_card'], [])
     for tr in trs:
-        if tr.startswith(r'<tr class="ser-ttl">'):    # series title
-            series_title_match = re.search(r'<strong>(.*?)</strong>', tr)
-            if not series_title_match:
-                error("Cannot find series title: '{}'".format(tr))
+        #print(tr["class"])
+        if validate_classes(tr, SERIES_CLASS):
+            print("Series: " + tr.select("a[class^=_item_title]")[0].text)
             series = Series()
-            series.title = series_title_match.group(1)
-            series.title = re.sub(r': \d+ Part Series$', '', series.title)
+            series.title = tr.select("a[class^=_item_title]")[0].text.strip()
             series.author = author
+            series_url = tr.select("a[class^=_item_title]")[0]['href']
+            series.url = series_url
+            print(series_url)
+            series.stories = parse_series_page(series_url, author)
             all_series.append(series)
-        elif tr.startswith(r'<tr class="sl">') or tr.startswith(r'<tr class="root-story'):
-            tds = re.findall(r'<td.*?>(.*?)</td>', tr, re.DOTALL)
-            if len(tds) != 4: error("Unexpected number of fields (expected 4 but where {}): '{}'".format(len(tds), tr))
-
-            td0_match = re.search(r'<a .*?href="(.*?)">(.*?)</a>.*?[(](.*?)[)]', tds[0])
-            if not td0_match: error("Couldn't match 1st field: '{}'".format(tds[0]))
+        elif validate_classes(tr, ONESHOT_CLASS):
+            print("Story: " + tr.select("a[class^=_item_title]")[0].text)
+            story_stats_elem = tr.select("div[class^=_stats]")[0]
             story = Story()
-            story.url = td0_match.group(1)
-            story.url = re.sub(r'^//', r'http://', story.url)
-            story.title = td0_match.group(2)
-            story.title = re.sub(r'<span>|</span>|<!--.*?-->', '', story.title)
+            story.title = tr.select("a[class^=_item_title]")[0].text.strip()
             story.author = author
-            story.rating = td0_match.group(3)
-
-            td1_match = re.search(r'^\s*([^<]*)(<|$)', tds[1], flags=re.DOTALL | re.UNICODE)
-            if not td1_match: error("Couldn't match 2nd field: '{}'".format(tds[1]))
-            story.teaser = td1_match.group(1)
-            story.teaser = story.teaser.strip()
-            if re.search(r'ico_h.gif', tds[1]):
-                story.hot = True
+            story.url = tr.select("a[class^=_item_title]")[0]['href']
+            if not story.url.startswith('https://www.literotica.com'):
+                story.url = "https://www.literotica.com" + story.url
+            rating_elem = story_stats_elem.find('span', {'title' : 'Rating'})
+            if rating_elem:
+                story.rating = rating_elem.find_all('span', recursive=False)[0].text.strip()
             else:
-                story.hot = False
-
-            td2_match = re.search(r'<span>(.*?)</span>', tds[2])
-            story.category = td2_match.group(1)
-
-            td3_match = re.search(r'\s*(.+)\s*', tds[3])
-            story.date = td3_match.group(1)
-
-            if tr.startswith(r'<tr class="sl">'):
-                series.stories.append(story)
-                story = None
-            else:
-                series = None
-                all_oneshots.append(story)
-                story = None
-        elif tr.startswith(r'<tr class="st-top">'):     # ignore
-            pass
-        else:
-            error("Unkown row type: '{}'".format(tr))
-
+                story.rating = "0.0"
+            story.hot = True if story_stats_elem.find('span', {'title' : 'Hot'}) else False
+            story.category = tr.select("a[class^=_item_category]")[0].text.strip()
+            story.date = tr.select("span[class^=_date_approve]")[0].text.strip()
+            story.teaser = "" if not tr.select("p[class^=_item_description]") else tr.select("p[class^=_item_description]")[0].text.strip()
+            all_oneshots.append(story)
+    print("total oneshots [%d], total series [%d]" % (len(all_oneshots), len(all_series)))
     return (all_oneshots, all_series)
 
 
@@ -429,40 +473,66 @@ def extract_id(url):
     p = re.sub('/$', '', p)
     idx = p.rfind('/')
     if idx == -1: error("unexpected url: {}".format(url))
-    return p[idx+1:]
+    url_id = p[idx+1:]
+    print("url_id [%s]" % url_id)
+    return url_id
 
 def get_story_text(st):
+    print('getting text')
     html, _ = fetch_url(st.url) # assuming url leads to first page and has no query part
-    sel_match = re.search(r'<div class="b-pager-pages">(.*?)</div>', html)
-    if not sel_match: error("Couldn't find page selection part.")
-    vals = re.findall('<option value=".*?">(\d+)</option>', sel_match.group(1))
-    if not vals: # just one page
-        vals = ['1']
-    complete_text = None
-    for v in vals:
-        url = st.url + '?page=' + v
-        if v == '1':
-            url = st.url
-        html, _ = fetch_url(url)
-        text_match = re.search(r'<div class="b-story-body-x.*?">.*?<div>(.*?)</div>', html, re.DOTALL)
-        if not text_match: error("Couldn't find text body.")
-        text = text_match.group(1)
-        text = text.strip()
-        strip_outer_p_match = re.search(r'^<p>(.*)</p>$', text, re.DOTALL)
-        if strip_outer_p_match:
-            text = strip_outer_p_match.group(1)
+    soup = bs4.BeautifulSoup(html, 'html.parser')
+    paginator_parent_element = soup.find('span', {'title' : 'Previous Page'})
+    if paginator_parent_element:
+        paginator_parent_element = paginator_parent_element.parent
+        paginator_elements = paginator_parent_element.find_all('a', recursive=False)
+    else:
+        paginator_elements = [ 1 ]
+    #sel_match = re.search(r'<div class="b-pager-pages">(.*?)</div>', html)
+    
+    #[0].select("div[class^=_item_title]")[0]['href']
 
+    #vals = re.findall('<option value=".*?">(\d+)</option>', sel_match.group(1))
+    complete_text = ""
 
-        if complete_text == None:
-            complete_text = text
+    end = 1
+    if paginator_parent_element:
+        for pe in paginator_elements:
+            if pe.text.strip() == '' or not pe.text.strip().isnumeric():
+                continue
+            if int(pe.text.strip()) > end:
+                end = int(pe.text.strip())
+
+    for idx in range(1, end+1):
+        print("page %s" % idx)
+        url_suffix = "" if idx == 1 else "?page={current_page}".format(current_page=idx)
+        url = st.url + url_suffix
+
+        story_page_html, _ = fetch_url(url)
+        story_page_soup = bs4.BeautifulSoup(story_page_html, 'html.parser')
+        #print(story_page_soup)
+        #text_parent = story_page_soup.find('div', {'panel' : 'article'})
+        text_parent = story_page_soup.select('.panel.article')[0]
+        if not text_parent:
+            error("Couldn't find text body.")
+        
+        #print(text_parent)
+        
+        text_elements = text_parent.find_all('p', recursive=True)
+        lines = ""
+        for elem in text_elements:
+            #print(elem)
+            #print(elem.text)
+            if elem.text is None or elem.text == "":
+                continue
+            #print(elem.text)
+            lines += "\n{}".format(str(elem)) if lines != "" else str(elem)
+        if idx > 1:
+            complete_text += '\n\n' + lines
         else:
-            complete_text += '\n\n' + text
-
-    if not complete_text:
+            complete_text = lines
+    if complete_text == "":
         warning('Unable to extract text for {}.'.format(st.url))
-    complete_text = '<p>{}</p>'.format(complete_text)
-
-    return complete_text
+    return "<p>%s</p>" % complete_text
 
 
 class FrozenClass(object):
@@ -476,7 +546,6 @@ class FrozenClass(object):
 
     def _freeze(self):
         self.__isfrozen = True
-
 
 
 class Story(FrozenClass):
@@ -520,6 +589,7 @@ class Series(FrozenClass):
     def __init__(self):
         self.title = None
         self.author = None
+        self.url = None
         self.stories = []
         self._freeze()
 
@@ -557,8 +627,9 @@ def fetch_url(url, binary=False):
             mime_type = mime_type.decode('UTF-8')
             url_mem_cache[url] = (data, mime_type)
             return data, mime_type
-    info("downloading '{}'...".format(url))
+    info("fetching '{}'...".format(url))
     req = compat_urllib_request.Request(url, headers={ 'User-Agent': get_user_agent() })
+    # req = compat_urllib_request.Request(url, headers={ 'User-Agent': get_user_agent(), 'Cookie': 'enable_classic=1' })
     response = compat_urllib_request.urlopen(req)
     data = response.read()
     mime_type = get_content_type(response)
