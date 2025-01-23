@@ -45,5 +45,5 @@ optional arguments:
 ```
 
 
-Written by hoelty, license: CC0.
+Written by hoelty, revised by mueslimak3r, license: CC0.
 
