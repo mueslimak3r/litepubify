@@ -101,9 +101,10 @@ def main():
     for url in args.url:
         story_html, _ = fetch_url(url)
         page_id = extract_id(url)
-        print(page_id)
+        print("target id [%s]" % str(page_id))
         found_story = None
         found_series = None
+        print("searching oneshots for target id [%s]" % str(page_id))
         for st in all_oneshots:
             print(extract_id(st.url))
             if extract_id(st.url) == page_id:
@@ -112,7 +113,17 @@ def main():
                 break
 
         if not found_story:
+            print("searching series for target id [%s]" % str(page_id))
             for series in all_series:
+                print("searching series for target id [%s]" % str(page_id))
+                if extract_id(series.url) == page_id:
+                    found_series = series
+                    found_story = series.stories[0]
+                    if args.single:
+                        found_oneshots_and_series.append(found_story)
+                    else:
+                        found_oneshots_and_series.append(series)
+                    break
                 for story in series.stories:
                     if extract_id(story.url) == page_id:
                         found_story = story
@@ -420,6 +431,7 @@ def parse_author_works_page(html):
             series.title = tr.select("a[class^=_item_title]")[0].text.strip()
             series.author = author
             series_url = tr.select("a[class^=_item_title]")[0]['href']
+            series.url = series_url
             print(series_url)
             series.stories = parse_series_page(series_url, author)
             all_series.append(series)
@@ -442,7 +454,7 @@ def parse_author_works_page(html):
             story.date = tr.select("span[class^=_date_approve]")[0].text.strip()
             story.teaser = "" if not tr.select("p[class^=_item_description]") else tr.select("p[class^=_item_description]")[0].text.strip()
             all_oneshots.append(story)
-    print(len(all_oneshots), len(all_series))
+    print("total oneshots [%d], total series [%d]" % (len(all_oneshots), len(all_series)))
     return (all_oneshots, all_series)
 
 
@@ -461,7 +473,9 @@ def extract_id(url):
     p = re.sub('/$', '', p)
     idx = p.rfind('/')
     if idx == -1: error("unexpected url: {}".format(url))
-    return p[idx+1:]
+    url_id = p[idx+1:]
+    print("url_id [%s]" % url_id)
+    return url_id
 
 def get_story_text(st):
     print('getting text')
@@ -575,6 +589,7 @@ class Series(FrozenClass):
     def __init__(self):
         self.title = None
         self.author = None
+        self.url = None
         self.stories = []
         self._freeze()
 
@@ -612,7 +627,7 @@ def fetch_url(url, binary=False):
             mime_type = mime_type.decode('UTF-8')
             url_mem_cache[url] = (data, mime_type)
             return data, mime_type
-    info("downloading '{}'...".format(url))
+    info("fetching '{}'...".format(url))
     req = compat_urllib_request.Request(url, headers={ 'User-Agent': get_user_agent() })
     # req = compat_urllib_request.Request(url, headers={ 'User-Agent': get_user_agent(), 'Cookie': 'enable_classic=1' })
     response = compat_urllib_request.urlopen(req)
