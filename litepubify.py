@@ -26,6 +26,9 @@ import uuid
 import xml.sax.saxutils as saxutils
 import zipfile
 import bs4
+import urllib
+import ssl
+from time import sleep
 
 # python 2 / 3 compatibility code
 try:
@@ -181,6 +184,12 @@ def parse_story_header(html):
     else:
         error("Cannot find author link in html.")
         error("Cannot find author's member page link in html.")
+
+    if title:
+        title = saxutils.escape(title)
+        print(title)
+    if author:
+        author = saxutils.escape(author)
     return title, author, url
     
 
@@ -192,17 +201,30 @@ def make_epub_from_stories_and_series(stories_and_series, author):
 
     """
     book = EpubBook()
-    book.title = stories_and_series[0].title
-    if args.title: book.title = args.title
+    book.title = saxutils.escape(stories_and_series[0].title)
+    if args.title:
+        info(args.title)
+        book.title = saxutils.escape(args.title)
+        info(args.title)
     book.creator = author
 
     cover_txt = COVER_TEMPLATE.format(
-        title=saxutils.escape(book.title),
-        author=saxutils.escape(author))
+        title=book.title,
+        author=author)
     cover_html = TXT_HTML_TEMPLATE.format(title='cover', content=cover_txt)
     book.add_cover(cover_html)
 
     s_count = 1
+
+    total_count = 0
+    for s_obj in stories_and_series:
+        if isinstance(s_obj, Story):
+            total_count += 1
+        else:
+            total_count += len(s_obj.stories)
+    print("total stories and series [%s]" % total_count)
+
+
     for s in stories_and_series:
         if isinstance(s, Story):
             add_story_to_ebook(s, 'content{0:02d}.html'.format(s_count), book)
@@ -214,8 +236,9 @@ def make_epub_from_stories_and_series(stories_and_series, author):
                     'part{0:02d}x{1:02d}.html'.format(s_count, chap_count),
                     book)
                 chap_count += 1
-                info(chap_count)
+                #info(chap_count)
         s_count += 1
+        
 
     path = re.sub(r'[^\w_. -]', r'_', book.title, flags=re.UNICODE)
     arch_filename = path + '.epub'
@@ -258,8 +281,7 @@ def add_story_to_ebook(st, filename, book):
     cleaner = XHTMLCleaner()
     cleaner.feed(txt)
     txt = cleaner.get_output()
-
-    txt = TITLE_TEMPLATE.format(title=st.title, author=st.author) + txt
+    txt = TITLE_TEMPLATE.format(title=st.title, author=st.author) + re.sub("&(?!amp;)", "&amp;", txt)
     html = TXT_HTML_TEMPLATE.format(title=saxutils.escape(book.title), content=txt)
     book.add_html(st.title, st.teaser, html, filename)
 
@@ -385,13 +407,13 @@ def parse_series_page(page_url, author):
         story = Story()
         title_elem = chapter_elem.find_all('a', recursive=False)[0]
         story.url = title_elem['href']
-        story.title = title_elem.text.strip()
+        story.title = saxutils.escape(title_elem.text.strip())
         story.author = author
 
         subtitle_elem = chapter_elem.find_all('p', recursive=False)[0]
         story.category = subtitle_elem.find_all('a', recursive=False)[0].text.strip()
         teaser = subtitle_elem.text.strip()
-        story.teaser = teaser.replace(story.category, '').strip()
+        story.teaser = saxutils.escape(teaser.replace(story.category, '').strip())
 
         story.rating = 0.0
         story.hot = False
@@ -405,7 +427,7 @@ def parse_author_works_page(html):
     if not author_element:
         error("Cannot determine author on member page.")
     if "Stories by " in author_element.text.strip():
-        author = author_element.text.strip().replace("Stories by ", "").strip()
+        author = saxutils.escape(author_element.text.strip().replace("Stories by ", "").strip())
     else:
         error("Cannot determine author on member page.")
     subm_table_match = soup.select("div[class^=_works_wrapper]")
@@ -428,7 +450,7 @@ def parse_author_works_page(html):
         if validate_classes(tr, SERIES_CLASS):
             print("Series: " + tr.select("a[class^=_item_title]")[0].text)
             series = Series()
-            series.title = tr.select("a[class^=_item_title]")[0].text.strip()
+            series.title = saxutils.escape(tr.select("a[class^=_item_title]")[0].text.strip())
             series.author = author
             series_url = tr.select("a[class^=_item_title]")[0]['href']
             series.url = series_url
@@ -439,7 +461,7 @@ def parse_author_works_page(html):
             print("Story: " + tr.select("a[class^=_item_title]")[0].text)
             story_stats_elem = tr.select("div[class^=_stats]")[0]
             story = Story()
-            story.title = tr.select("a[class^=_item_title]")[0].text.strip()
+            story.title = saxutils.escape(tr.select("a[class^=_item_title]")[0].text.strip())
             story.author = author
             story.url = tr.select("a[class^=_item_title]")[0]['href']
             if not story.url.startswith('https://www.literotica.com'):
@@ -452,7 +474,7 @@ def parse_author_works_page(html):
             story.hot = True if story_stats_elem.find('span', {'title' : 'Hot'}) else False
             story.category = tr.select("a[class^=_item_category]")[0].text.strip()
             story.date = tr.select("span[class^=_date_approve]")[0].text.strip()
-            story.teaser = "" if not tr.select("p[class^=_item_description]") else tr.select("p[class^=_item_description]")[0].text.strip()
+            story.teaser = "" if not tr.select("p[class^=_item_description]") else saxutils.escape(tr.select("p[class^=_item_description]")[0].text.strip())
             all_oneshots.append(story)
     print("total oneshots [%d], total series [%d]" % (len(all_oneshots), len(all_series)))
     return (all_oneshots, all_series)
@@ -478,7 +500,7 @@ def extract_id(url):
     return url_id
 
 def get_story_text(st):
-    print('getting text')
+    #print('getting text')
     html, _ = fetch_url(st.url) # assuming url leads to first page and has no query part
     soup = bs4.BeautifulSoup(html, 'html.parser')
     paginator_parent_element = soup.find('span', {'title' : 'Previous Page'})
@@ -501,9 +523,10 @@ def get_story_text(st):
                 continue
             if int(pe.text.strip()) > end:
                 end = int(pe.text.strip())
-
+    
     for idx in range(1, end+1):
-        print("page %s" % idx)
+        #print("page %s" % idx)
+
         url_suffix = "" if idx == 1 else "?page={current_page}".format(current_page=idx)
         url = st.url + url_suffix
 
@@ -627,10 +650,18 @@ def fetch_url(url, binary=False):
             mime_type = mime_type.decode('UTF-8')
             url_mem_cache[url] = (data, mime_type)
             return data, mime_type
-    info("fetching '{}'...".format(url))
+    debug("fetching '{}'...".format(url))
     req = compat_urllib_request.Request(url, headers={ 'User-Agent': get_user_agent() })
     # req = compat_urllib_request.Request(url, headers={ 'User-Agent': get_user_agent(), 'Cookie': 'enable_classic=1' })
-    response = compat_urllib_request.urlopen(req)
+    for i in range(5):
+        try:
+            response = compat_urllib_request.urlopen(req)
+        except (urllib.error.URLError, ssl.SSLEOFError) as e:
+            print("Error fetching '{}': {}".format(url, e))
+        if response.getcode() == 200:
+            break
+        sleep(0.1)
+        i += 1
     data = response.read()
     mime_type = get_content_type(response)
     if args.disk_cache_path:
@@ -711,7 +742,9 @@ class EpubBook(FrozenClass):
         section.id = 'html_%d' % (len(self.sections) + 1)
         section.filename = filename
         section.html = html
+        print(title)
         section.title = title
+        print(teaser)
         section.teaser = teaser
         self.sections.append(section)
 
