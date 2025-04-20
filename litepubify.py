@@ -158,6 +158,7 @@ def parse_commandline_arguments():
     parser.add_argument('-t', '--title', help='override the title in the epub metadata and default file name')
     parser.add_argument('-o', '--output', metavar='FILENAME', help='set output file name (optional, otherwise story title is used)')
     parser.add_argument('-s', '--single', action='store_true', help='do not attempt to download the entire series (if it is a series) but just this one story')
+    parser.add_argument('-n', '--newer', action='store_true', help='only download the series parts including and after the specified ID (if it is a series)')
     parser.add_argument('--noteaser', action='store_true', help='do not include the one line teaser in the table of contents')
     parser.add_argument('--noimages', action='store_true', help='do not include any images (in case of illustrated stories)')
     parser.add_argument('-v', '--verbose', action='store_true', help='output more information')
@@ -224,13 +225,30 @@ def make_epub_from_stories_and_series(stories_and_series, author):
             total_count += len(s_obj.stories)
     print("total stories and series [%s]" % total_count)
 
+    arg_url_id = extract_id(args.url[0])
+    newer_mode = False
+    if args.newer:
+        print("-n flag enabled - will only save series parts including and proceeding the specified story")
+        newer_mode = True
 
     for s in stories_and_series:
         if isinstance(s, Story):
             add_story_to_ebook(s, 'content{0:02d}.html'.format(s_count), book)
         else:
             chap_count = 1
+            should_add = True
+            if args.newer:
+                should_add = False
             for st in s.stories:
+                if newer_mode:
+                    if arg_url_id == extract_id(s.url):
+                        newer_mode = False
+                        print("newer mode disabled - url provided does not match a part in a series")
+                    elif arg_url_id == extract_id(st.url):
+                        should_add = True
+                    elif not should_add and arg_url_id != extract_id(st.url):
+                        print("skipping series part %s - looking for part %s" % (extract_id(st.url), arg_url_id))
+                        continue
                 add_story_to_ebook(
                     st,
                     'part{0:02d}x{1:02d}.html'.format(s_count, chap_count),
